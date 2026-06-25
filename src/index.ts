@@ -1,125 +1,20 @@
-import { serve } from "bun";
-import index from "./index.html";
+import { Elysia } from "elysia";
+import { cors } from "@elysiajs/cors";
+import { staticPlugin } from "@elysiajs/static";
 import { MEMBERS, getMemberByUrl, getAdjacentMembers } from "./members";
 
-function cors(data: unknown, status = 200) {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
-    },
-  });
-}
-
-function redirect(url: string) {
-  return new Response(null, { status: 302, headers: { Location: url } });
-}
-
-function getSiteFromRequest(req: Request): string {
+function getSite(req: Request) {
   const fromQuery = new URL(req.url).searchParams.get("url");
   if (fromQuery) return fromQuery;
-  const referer = req.headers.get("Referer");
-  if (referer) return referer;
-  return "";
+  return req.headers.get("Referer") ?? "";
 }
 
-const server = serve({
-  routes: {
-    "/lanyard.png": async () => {
-      const file = Bun.file("./public/lanyard.png");
-      return new Response(file, {
-        headers: { "Content-Type": "image/png" },
-      });
-    },
+function randomMember() {
+  return MEMBERS[Math.floor(Math.random() * MEMBERS.length)]!;
+}
 
-    "/api/members": {
-      async GET() {
-        return cors(MEMBERS);
-      },
-      OPTIONS() {
-        return new Response(null, { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS" } });
-      },
-    },
-
-    "/api/ring": {
-      async GET(req) {
-        const site = getSiteFromRequest(req);
-        const current = getMemberByUrl(site) || null;
-        if (current) {
-          const { prev, next } = getAdjacentMembers(current.url);
-          const others = MEMBERS.filter((m) => m.url !== current.url);
-          const random = others.length > 0
-            ? others[Math.floor(Math.random() * others.length)]
-            : MEMBERS[0]!;
-          return cors({ current, prev, next, random, members: MEMBERS });
-        }
-        const randomIndex = Math.floor(Math.random() * MEMBERS.length);
-        return cors({ current: null, prev: MEMBERS[randomIndex]!, next: MEMBERS[(randomIndex + 1) % MEMBERS.length]!, random: MEMBERS[randomIndex]!, members: MEMBERS });
-      },
-      OPTIONS() {
-        return new Response(null, { headers: { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Methods": "GET, OPTIONS" } });
-      },
-    },
-
-    "/api/ring/prev": {
-      GET(req) {
-        const site = getSiteFromRequest(req);
-        const current = getMemberByUrl(site);
-        if (current) {
-          const { prev } = getAdjacentMembers(current.url);
-          return redirect(prev.url);
-        }
-        return redirect(MEMBERS[Math.floor(Math.random() * MEMBERS.length)]!.url);
-      },
-    },
-
-    "/api/ring/next": {
-      GET(req) {
-        const site = getSiteFromRequest(req);
-        const current = getMemberByUrl(site);
-        if (current) {
-          const { next } = getAdjacentMembers(current.url);
-          return redirect(next.url);
-        }
-        return redirect(MEMBERS[Math.floor(Math.random() * MEMBERS.length)]!.url);
-      },
-    },
-
-    "/api/ring/random": {
-      GET() {
-        return redirect(MEMBERS[Math.floor(Math.random() * MEMBERS.length)]!.url);
-      },
-    },
-
-    "/api/embed.js": {
-        async GET() {
-          const script = generateEmbedScript();
-          return new Response(script, {
-            headers: {
-              "Content-Type": "application/javascript; charset=utf-8",
-              "Access-Control-Allow-Origin": "*",
-            },
-          });
-        },
-      },
-
-      "/*": index,
-    },
-
-    development: process.env.NODE_ENV !== "production" && {
-    hmr: true,
-    console: true,
-  },
-});
-
-console.log(`☕ lanyard.cafe running at ${server.url}`);
-
-function generateEmbedScript(): string {
-  return `
-(function() {
+function embedScript() {
+  return `(function() {
   var host = location.hostname.replace(/^www\\./, '');
   var container = document.createElement('div');
   container.id = 'lc-embed';
@@ -138,12 +33,14 @@ function generateEmbedScript(): string {
   var lavenderBg = dark ? '#352B45' : '#EEE6F5';
   var lavenderText = dark ? '#D4C5E2' : '#9B7EB5';
 
-  fetch(${JSON.stringify("https://lanyard.cafe")} + '/api/ring?url=' + encodeURIComponent(host))
+  fetch('https://lanyard.cafe/api/ring?url=' + encodeURIComponent(host))
     .then(function(r) { return r.json(); })
     .then(function(data) {
       var prev = data.prev, next = data.next, random = data.random;
       var isMember = data.current !== null;
-      var currentLine = isMember ? '<p style="margin:0;font-size:14px;color:' + text + ';">you are at <span style="font-weight:600;color:' + textStrong + ';">' + data.current.url + '</span></p>' : '';
+      var currentLine = isMember
+        ? '<p style="margin:0;font-size:14px;color:' + text + ';">you are at <span style="font-weight:600;color:' + textStrong + ';">' + data.current.url + '</span></p>'
+        : '';
       container.innerHTML =
         '<section style="margin-bottom:48px;">' +
         '<div style="background:' + bg + ';backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1.5px solid ' + border + ';border-radius:16px;padding:16px;display:inline-block;min-width:260px;font-size:14px;">' +
@@ -157,6 +54,56 @@ function generateEmbedScript(): string {
         '</section>';
     })
     .catch(function() {});
-})();
-  `.trim();
+})();`;
 }
+
+const app = new Elysia()
+  .use(cors())
+  .get("/api/members", () => MEMBERS)
+  .get("/api/ring", ({ request }) => {
+    const site = getSite(request);
+    const current = getMemberByUrl(site) ?? null;
+    if (current) {
+      const { prev, next } = getAdjacentMembers(current.url);
+      const others = MEMBERS.filter((m) => m.url !== current.url);
+      const random =
+        others[Math.floor(Math.random() * others.length)] ?? MEMBERS[0]!;
+      return { current, prev, next, random, members: MEMBERS };
+    }
+    const pick = randomMember();
+    const i = MEMBERS.indexOf(pick);
+    return {
+      current: null,
+      prev: pick,
+      next: MEMBERS[(i + 1) % MEMBERS.length]!,
+      random: pick,
+      members: MEMBERS,
+    };
+  })
+  .get("/api/ring/prev", ({ request, redirect }) => {
+    const site = getSite(request);
+    const current = getMemberByUrl(site);
+    if (current) return redirect(getAdjacentMembers(current.url).prev.url);
+    return redirect(randomMember().url);
+  })
+  .get("/api/ring/next", ({ request, redirect }) => {
+    const site = getSite(request);
+    const current = getMemberByUrl(site);
+    if (current) return redirect(getAdjacentMembers(current.url).next.url);
+    return redirect(randomMember().url);
+  })
+  .get("/api/ring/random", ({ redirect }) => redirect(randomMember().url))
+  .get(
+    "/api/embed.js",
+    () =>
+      new Response(embedScript(), {
+        headers: {
+          "Content-Type": "application/javascript; charset=utf-8",
+          "Access-Control-Allow-Origin": "*",
+        },
+      }),
+  )
+  .use(staticPlugin({ assets: "dist", prefix: "/" }))
+  .listen(8943);
+
+console.log(`lanyard.cafe running at ${app.server?.url}`);
