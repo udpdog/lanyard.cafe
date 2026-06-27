@@ -34,3 +34,8 @@ Open `src/members.ts` and add an object to the `MEMBERS` array:
 ## finding your Discord ID
 
 Enable Developer Mode in Discord (Settings -> Advanced -> Developer Mode), then right-click your username and choose **Copy User ID**.
+
+
+## ping pr reviewer
+
+please ping mae0 to review your pr!
